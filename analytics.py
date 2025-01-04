@@ -12,6 +12,8 @@ import numpy as np
 
 app = Dash(external_stylesheets=[dbc.themes.BOOTSTRAP])
 
+server = app.server
+
 cwd = os.getcwd()
 
 configs = toml.load(f"{cwd}\\config.toml")
