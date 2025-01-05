@@ -1,1 +1,11 @@
-pip freeze > requirements.txt
+plotly
+sqlite3
+os
+pandas
+dash
+toml
+dash_bootstrap_components
+datetime
+numpy
+flask
+waitress
