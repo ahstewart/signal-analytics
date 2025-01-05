@@ -1,5 +1,4 @@
 plotly
-sqlite3
 os
 pandas
 dash
