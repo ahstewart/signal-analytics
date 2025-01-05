@@ -23,7 +23,7 @@ start = datetime.strptime(configs['start_date'], "%Y-%m-%d %H:%M:%S")
 end = datetime.strptime(configs['end_date'], "%Y-%m-%d %H:%M:%S")
 total_days = abs(end - start).days
 
-con = sql.connect(configs['db_path'])
+con = sql.connect(f"{cwd}/data/signal-decrypted-1-3-25.db")
 cursor = con.cursor()
 
 messages_clean_query = "select u.rowid, u.id, u.type, u.sent_at, DATETIME(ROUND(u.sent_at/1000), 'unixepoch', 'localtime') as date_sent, u.body, u.hasAttachments, u.hasFileAttachments, u.hasVisualMediaAttachments, " \
