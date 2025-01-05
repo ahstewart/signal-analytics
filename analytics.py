@@ -18,7 +18,7 @@ app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], server=server)
 
 cwd = os.getcwd()
 
-configs = toml.load(f"{cwd}\\config.toml")
+configs = toml.load(f"{cwd}/config.toml")
 start = datetime.strptime(configs['start_date'], "%Y-%m-%d %H:%M:%S")
 end = datetime.strptime(configs['end_date'], "%Y-%m-%d %H:%M:%S")
 total_days = abs(end - start).days
