@@ -23,7 +23,7 @@ start = datetime.strptime(configs['start_date'], "%Y-%m-%d %H:%M:%S")
 end = datetime.strptime(configs['end_date'], "%Y-%m-%d %H:%M:%S")
 total_days = abs(end - start).days
 
-con = sql.connect(f"{cwd}/data/signal-decrypted-1-3-25.db")
+con = sql.connect(configs['db_path'])
 cursor = con.cursor()
 
 messages_clean_query = "select u.rowid, u.id, u.type, u.sent_at, DATETIME(ROUND(u.sent_at/1000), 'unixepoch', 'localtime') as date_sent, u.body, u.hasAttachments, u.hasFileAttachments, u.hasVisualMediaAttachments, " \
@@ -48,7 +48,9 @@ message_count_by_day_query = f"select count(*), DATE(date_sent) as date, case ca
                              f"THEN 4 WHEN 'Friday' THEN 5 WHEN 'Saturday' THEN 6 END"
 message_count_by_hour_query = f"select count(*), strftime('%H', `date_sent`) as hour from ({messages_clean_query}) group by hour"
 top_ten_emojis_query = f"select count(*), emoji from ({reactions_clean_query}) group by emoji order by count(*) desc lIMIT 10"
-laugh_rate_query = f"select m.profileFullName as name, round((r.num_laughs * 1.0)/(count(*)), 2) as laugh_rate, count(*) as num_messages, r.num_laughs from ({messages_clean_query}) m INNER JOIN (select count(*) as num_laughs, emoji_receiver from ({reactions_clean_query}) where emoji='😂' group by emoji_receiver order by num_laughs desc) r on m.profileFullName = r.emoji_receiver group by m.profileFullName order by laugh_rate desc;"
+laugh_rate_query = f"select *, round((y.num_laughs*1.0/x.num_mess_w_laugh), 2) as improved_laugh_rate from (select count(distinct body) as num_mess_w_laugh, emoji_receiver from ({reactions_clean_query}) react where emoji='😂' group by emoji_receiver order by num_mess_w_laugh desc) x INNER JOIN (select count(*) as num_mess_w_laugh, m.profileFullName as name, round((r.num_laughs * 1.0)/(count(*)), 2) as laugh_rate, count(*) as num_messages, r.num_laughs from ({messages_clean_query}) m INNER JOIN (select count(*) as num_laughs, emoji_receiver from ({reactions_clean_query}) where emoji='😂' group by emoji_receiver order by num_laughs desc) r on m.profileFullName = r.emoji_receiver group by m.profileFullName order by laugh_rate desc) y on x.emoji_receiver=y.name order by improved_laugh_rate desc;"
+#improved_laugh_rate_query = f"select count(distinct body) as num_mess_w_laugh, emoji_receiver from ({reactions_clean_query}) where emoji='😂' group by emoji_receiver order by num_mess_w_laugh desc;"
+
 
 def getReactionDist(unit):
     sql.connect(configs['db_path'])
@@ -132,7 +134,9 @@ hour_message_count = px.bar(hour_df, x="Hour", y="Total Message Count", title="M
 hour_per_unit_df = pd.DataFrame(columns=["Total Message Count", "Hour", "Unit"])
 weekday_per_unit_df = pd.DataFrame(columns=["Total Message Count", "Date", "Day of the Week", "Unit"])
 top_emojis_df = pd.DataFrame(top_ten_emojis, columns=["Total Count", "Emoji"])
-laugh_rate_df = pd.DataFrame(laugh_rate, columns=["Unit", "Laugh Rate", "Total Message Count", "Total Number of 😂"])
+laugh_rate_df = pd.DataFrame(laugh_rate, columns=["Number of Messages W/ At Least 1 😂", "Unit Dup", "Tot Mess Dup", "Unit", "Raw Laugh Rate", "Total Message Count", "Total Number of 😂", "Improved Laugh Rate"])
+laugh_rate_df = laugh_rate_df.drop(columns=["Unit Dup", "Tot Mess Dup"])
+laugh_rate_df = laugh_rate_df.loc[:, ["Unit", "Improved Laugh Rate", "Raw Laugh Rate", "Total Message Count", "Total Number of 😂", "Number of Messages W/ At Least 1 😂"]]
 
 # get dict of total message counts
 total_message_counts_dict = {u: c for u, c in total_counts}
@@ -255,13 +259,10 @@ def render_general(tab):
 def fill_basic_stats(value):
     total_mess = total_message_counts_dict[value]
     avg_mess_per_day = round(total_mess / total_days)
-    reactions_recieved = 0
-    reactions_given = 0
-    for r in reaction_clean:
-        if r[5] == value:
-            reactions_given += 1
-        if r[4] == value:
-            reactions_recieved += 1
+    reactions_recieved = reaction_rec_dist[value]
+    reactions_recieved = sum(j for i, j in reactions_recieved)
+    reactions_given = reaction_dist[value]
+    reactions_given = sum(j for i, j in reactions_given)
     avg_react_per_day = round(reactions_given / total_days)
     avg_react_rec_per_day = round(reactions_recieved / total_days)
     avg_react_per_mess = round(reactions_given / total_mess)
@@ -333,6 +334,9 @@ def fill_ex_comm(value):
     reacted_to_norm = unit_reaction_details_norm['given']
     reacted_to = unit_reaction_details['given']
     mentioned_data = mention_details_dict[value]
+    if reacted_to == []: reacted_to = [(0, "No One")]
+    if reacted_to_norm == []: reacted_to_norm = [(0, "No One")]
+    if mentioned_data['given'] == []: mentioned_data['given'] = [(0, "No One")]
     reacted = dbc.Alert(dcc.Markdown(
         f"""
             ** Reacted To Most **  
