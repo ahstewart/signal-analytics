@@ -6,3 +6,4 @@ dash_bootstrap_components
 numpy
 flask
 waitress
+gunicorn
