@@ -1,0 +1,12 @@
+plotly
+os
+pandas
+dash
+toml
+dash_bootstrap_components
+datetime
+numpy
+flask
+waitress
+gunicorn
+chart_studio

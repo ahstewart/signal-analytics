@@ -4,19 +4,21 @@ from plotly.subplots import make_subplots
 import sqlite3 as sql
 import os
 import pandas as pd
-from dash import Dash, dcc, html, callback, Output, Input, dash_table
+from dash import Dash, dcc, html, callback, Output, Input, dash_table, clientside_callback, ClientsideFunction
 import toml
 import dash_bootstrap_components as dbc
 from datetime import datetime
 import numpy as np
+import flask
+from waitress import serve
 
-app = Dash(external_stylesheets=[dbc.themes.BOOTSTRAP])
+server = flask.Flask(__name__)
 
-server = app.server
+app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], server=server)
 
 cwd = os.getcwd()
 
-configs = toml.load(f"{cwd}\\config.toml")
+configs = toml.load(f"{cwd}/config.toml")
 start = datetime.strptime(configs['start_date'], "%Y-%m-%d %H:%M:%S")
 end = datetime.strptime(configs['end_date'], "%Y-%m-%d %H:%M:%S")
 total_days = abs(end - start).days
@@ -46,7 +48,9 @@ message_count_by_day_query = f"select count(*), DATE(date_sent) as date, case ca
                              f"THEN 4 WHEN 'Friday' THEN 5 WHEN 'Saturday' THEN 6 END"
 message_count_by_hour_query = f"select count(*), strftime('%H', `date_sent`) as hour from ({messages_clean_query}) group by hour"
 top_ten_emojis_query = f"select count(*), emoji from ({reactions_clean_query}) group by emoji order by count(*) desc lIMIT 10"
-laugh_rate_query = f"select m.profileFullName as name, count(*) as num_messages, r.num_laughs, round((r.num_laughs * 1.0)/(count(*)), 2) as laugh_rate from ({messages_clean_query}) m INNER JOIN (select count(*) as num_laughs, emoji_receiver from ({reactions_clean_query}) where emoji='😂' group by emoji_receiver order by num_laughs desc) r on m.profileFullName = r.emoji_receiver group by m.profileFullName order by laugh_rate desc;"
+laugh_rate_query = f"select *, round((y.num_laughs*1.0/x.num_mess_w_laugh), 2) as improved_laugh_rate from (select count(distinct body) as num_mess_w_laugh, emoji_receiver from ({reactions_clean_query}) react where emoji='😂' group by emoji_receiver order by num_mess_w_laugh desc) x INNER JOIN (select count(*) as num_mess_w_laugh, m.profileFullName as name, round((r.num_laughs * 1.0)/(count(*)), 2) as laugh_rate, count(*) as num_messages, r.num_laughs from ({messages_clean_query}) m INNER JOIN (select count(*) as num_laughs, emoji_receiver from ({reactions_clean_query}) where emoji='😂' group by emoji_receiver order by num_laughs desc) r on m.profileFullName = r.emoji_receiver group by m.profileFullName order by laugh_rate desc) y on x.emoji_receiver=y.name order by improved_laugh_rate desc;"
+#improved_laugh_rate_query = f"select count(distinct body) as num_mess_w_laugh, emoji_receiver from ({reactions_clean_query}) where emoji='😂' group by emoji_receiver order by num_mess_w_laugh desc;"
+
 
 def getReactionDist(unit):
     sql.connect(configs['db_path'])
@@ -73,7 +77,7 @@ def getReactionDetailsByUnit(unit):
 def getMostReactedMessage(unit):
     sql.connect(configs['db_path'])
     cursor = con.cursor()
-    cursor.execute(f"select count(*) as cnt, body from ({reactions_clean_query}) where emoji_receiver = '{unit}' and body not null group by body order by cnt desc limit 1;")
+    cursor.execute(f"select count(*) as cnt, body from ({reactions_clean_query}) where emoji_receiver = '{unit}' and body not null group by body order by cnt desc limit 2;")
     temp_most = cursor.fetchall()
     try:
         cursor.execute(f"select emoji, count(emoji), body, emoji_receiver from ({reactions_clean_query}) where body = \"{temp_most[0][1]}\" and emoji_receiver = '{unit}' group by emoji;")
@@ -119,7 +123,7 @@ counts_df_fig = px.bar(counts_df, x="Total Message Count", y="Unit", orientation
 counts_df_fig.update_layout(yaxis=dict(autorange="reversed"))
 reaction_df_freq = pd.DataFrame(reaction_summary, columns=["Unit", "Variety", "Frequency"])
 reaction_df_var = pd.DataFrame(reaction_summary, columns=["Unit", "Variety", "Frequency"]).sort_values(by="Variety", ascending=False)
-reaction_df_fig_freq = px.bar(reaction_df_freq, x="Frequency", y="Unit", orientation='h', title="Number of Total Reactions Used")
+reaction_df_fig_freq = px.bar(reaction_df_freq, x="Frequency", y="Unit", orientation='h', title="Total Reactions Used")
 reaction_df_fig_freq.update_layout(yaxis=dict(autorange="reversed"))
 reaction_df_fig_var = px.bar(reaction_df_var, x="Variety", y="Unit", orientation='h', title="Number of Distinct Reactions Used")
 reaction_df_fig_var.update_layout(yaxis=dict(autorange="reversed"))
@@ -130,7 +134,9 @@ hour_message_count = px.bar(hour_df, x="Hour", y="Total Message Count", title="M
 hour_per_unit_df = pd.DataFrame(columns=["Total Message Count", "Hour", "Unit"])
 weekday_per_unit_df = pd.DataFrame(columns=["Total Message Count", "Date", "Day of the Week", "Unit"])
 top_emojis_df = pd.DataFrame(top_ten_emojis, columns=["Total Count", "Emoji"])
-laugh_rate_df = pd.DataFrame(laugh_rate, columns=["Unit", "Total Message Count", "Total Number of 😂", "Laugh Rate"])
+laugh_rate_df = pd.DataFrame(laugh_rate, columns=["Number of Messages W/ At Least 1 😂", "Unit Dup", "Tot Mess Dup", "Unit", "Raw Laugh Rate", "Total Message Count", "Total Number of 😂", "Improved Laugh Rate"])
+laugh_rate_df = laugh_rate_df.drop(columns=["Unit Dup", "Tot Mess Dup"])
+laugh_rate_df = laugh_rate_df.loc[:, ["Unit", "Improved Laugh Rate", "Raw Laugh Rate", "Total Message Count", "Total Number of 😂", "Number of Messages W/ At Least 1 😂"]]
 
 # get dict of total message counts
 total_message_counts_dict = {u: c for u, c in total_counts}
@@ -176,12 +182,12 @@ cursor.close()
 
 app.layout = html.Div([
                 # dashboard title
-                html.H1(f"Signal Wrapped {configs['year']}", style={'textAlign':'center', 'background-color':'#3273dc', 'height':'60px', 'color':'white'}),
-                html.Br(style={'background-color':'#3273dc'}),
+                html.H1(f"Signal Wrapped {configs['year']}", style={'textAlign':'center', 'background-color':'#3273dc', 'height':'50px', 'color':'white'}),
+                #html.Br(style={'background-color':'#3273dc'}),
                 # header tabs
                 dcc.Tabs(id="tabs", value='Your Stats', children=[
-                    dcc.Tab(label='Your Stats', value='Your Stats'),
-                    dcc.Tab(label='General Stats', value='General Stats'),
+                    dcc.Tab(label='Your Stats', value='Your Stats', selected_style={'background-color':'#9dbbf8', 'color':'black'}),
+                    dcc.Tab(label='General Stats', value='General Stats', selected_style={'background-color':'#9dbbf8', 'color':'black'}),
                 ]),
                 # content div
                 html.Div(id='tabs-content', children=[
@@ -189,26 +195,27 @@ app.layout = html.Div([
                      html.Div(id='general-stats', children=[
                          html.Br(),
                          #html.H1(children='Some General Info', style={'textAlign':'center'}),
-                         html.H3(children='Message and Reaction Stats', style={'textAlign':'Left'}),
+                         html.H3(children='Aggregate Stats', style={'textAlign':'left','padding-left':'20px'}),
                          dcc.Graph(figure=counts_df_fig, id='total_counts'),
                          dcc.Graph(figure=reaction_df_fig_freq, id='reaction_summary_freq'),
                          dcc.Graph(figure=reaction_df_fig_var, id='reaction_summary_var'),
                          html.H3(children="Who's the funniest?", style={'textAlign':'left', 'padding-left':'20px'}),
-                         html.Label("Laugh Rates Per Unit"),
-                         dash_table.DataTable(data=laugh_rate_df.to_dict('records'), columns=[{"name": i, "id": i} for i in laugh_rate_df.columns]),
+                         html.Label("Laugh Rates Per Unit", style={'textAlign':'left', 'padding-left':'20px'}),
+                         html.Div(dash_table.DataTable(data=laugh_rate_df.to_dict('records'), columns=[{"name": i, "id": i} for i in laugh_rate_df.columns]), style={'padding-right': '20px', 'padding-left':'20px', 'width':'25px'}),
                          html.Br(),
-                         html.H3(children='What reactions do we love?', style={'textAlign':'left'}),
-                         html.Label("Top 10 Emojis Used"),
-                         dash_table.DataTable(data=top_emojis_df.to_dict('records'), columns=[{"name": i, "id": i} for i in top_emojis_df.columns]),
                          html.Br(),
-                         html.H3(children='Time and Date Stuff', style={'textAlign':'left'}),
+                         html.H3(children='Reaction Rank', style={'textAlign':'left', 'padding-left':'20px'}),
+                         html.Label("Top 10 Emojis Used", style={'textAlign':'left', 'padding-left':'20px'}),
+                         dash_table.DataTable(data=top_emojis_df.to_dict('records'), columns=[{"name": i, "id": i} for i in top_emojis_df.columns], style={'padding-right': '20px', 'padding-left':'20px', 'width':'25%'}),
+                         html.Br(),
+                         html.Br(),
+                         html.H3(children='Time and Date Behavior', style={'textAlign':'left', 'padding-left':'20px'}),
                          dcc.Graph(figure=weekday_message_count, id='weekday_message_count'),
-                         dcc.Graph(figure=hour_message_count, id='hour_message_count')], style={'display':'block', 'padding-left':'20px',
-                                                                                                'padding-right':'20px'}),
+                         dcc.Graph(figure=hour_message_count, id='hour_message_count')], style={'display':'block'}),
                     # your stats div
                     html.Div(id='your-stats', children=[
                          html.Br(),
-                         html.H2(children='Pick Your Unit', style={'textAlign':'center'}),
+                         html.H2(children='Pick A Unit', style={'textAlign':'center'}),
                          html.Br(),
                          html.Div(id='unit-dropdown', children=[
                             dcc.Dropdown(counts_df.Unit, 'Chris Moffitt', id='dropdown-selection')], style={'width':'300px', 'margin':'auto'}),
@@ -252,13 +259,10 @@ def render_general(tab):
 def fill_basic_stats(value):
     total_mess = total_message_counts_dict[value]
     avg_mess_per_day = round(total_mess / total_days)
-    reactions_recieved = 0
-    reactions_given = 0
-    for r in reaction_clean:
-        if r[5] == value:
-            reactions_given += 1
-        if r[4] == value:
-            reactions_recieved += 1
+    reactions_recieved = reaction_rec_dist[value]
+    reactions_recieved = sum(j for i, j in reactions_recieved)
+    reactions_given = reaction_dist[value]
+    reactions_given = sum(j for i, j in reactions_given)
     avg_react_per_day = round(reactions_given / total_days)
     avg_react_rec_per_day = round(reactions_recieved / total_days)
     avg_react_per_mess = round(reactions_given / total_mess)
@@ -294,14 +298,14 @@ def fill_basic_stats(value):
         f"""
             ** Favorite Reaction **  
             ### {fav_reaction[0]}
-            ##### *You used this {fav_reaction[1]} times*
+            ##### *{value} used this {fav_reaction[1]} times*
             """,
     ), color="dark")
     most_receieved_reaction = dbc.Alert(dcc.Markdown(
         f"""
             ** Reaction Received the Most **  
             ### {most_rec_reaction[0]}
-            ##### *You received this {most_rec_reaction[1]} times*
+            ##### *{value} received this {most_rec_reaction[1]} times*
             """,
     ), color="dark")
     most_reacted_message = dbc.Alert(dcc.Markdown(
@@ -330,25 +334,28 @@ def fill_ex_comm(value):
     reacted_to_norm = unit_reaction_details_norm['given']
     reacted_to = unit_reaction_details['given']
     mentioned_data = mention_details_dict[value]
+    if reacted_to == []: reacted_to = [(0, "No One")]
+    if reacted_to_norm == []: reacted_to_norm = [(0, "No One")]
+    if mentioned_data['given'] == []: mentioned_data['given'] = [(0, "No One")]
     reacted = dbc.Alert(dcc.Markdown(
         f"""
             ** Reacted To Most **  
             ### {reacted_to[0][1]}
-            ##### *You gave them {reacted_to[0][0]} reactions*  
+            ##### *{value} gave them {reacted_to[0][0]} reactions*  
             """,
     ), color="dark")
     reacted_norm = dbc.Alert(dcc.Markdown(
         f"""
             ** Reacted To Most (Per Message They Sent) **  
             ### {reacted_to_norm[0][1]}
-            ##### *You reacted to {np.round(reacted_to_norm[0][0] * 100, decimals=2)}% of their messages*  
+            ##### *{value} reacted to {np.round(reacted_to_norm[0][0] * 100, decimals=2)}% of their messages*  
             """,
     ), color="dark")
     mentioned = dbc.Alert(dcc.Markdown(
         f"""
             ** Mentioned Most **  
             ### {mentioned_data['given'][0][1]}
-            ##### *You mentioned them {mentioned_data['given'][0][0]} times*
+            ##### *{value} mentioned them {mentioned_data['given'][0][0]} times*
             """,
     ), color="dark")
     ex_comm_card = dbc.Card([
@@ -371,23 +378,23 @@ def fill_in_comm(value):
     mentioned_data = mention_details_dict[value]
     in_reacted = dbc.Alert(dcc.Markdown(
         f"""
-            ** Who Reacted to You the Most? **  
+            ** Who Reacted to {value} the Most? **  
             ### {reacted_rec[0][1]}
-            ##### *They gave you {reacted_rec[0][0]} reactions*
+            ##### *They gave {value} {reacted_rec[0][0]} reactions*
             """,
     ), color="dark")
     in_reacted_norm = dbc.Alert(dcc.Markdown(
         f"""
-            ** Who Reacted to You the Most? (Per Message You Sent) **  
+            ** Who Reacted to {value} the Most? (Per Message {value} Sent) **  
             ### {reacted_rec_norm[0][1]}
-            ##### *They reacted to {np.round(reacted_rec_norm[0][0] * 100, decimals=2)}% of your messages*  
+            ##### *They reacted to {np.round(reacted_rec_norm[0][0] * 100, decimals=2)}% of {value}'s messages*  
             """,
     ), color="dark")
     in_mentioned = dbc.Alert(dcc.Markdown(
         f"""
-            ** Who Mentioned You the Most **  
+            ** Who Mentioned {value} the Most **  
             ### {mentioned_data['received'][0][1]}
-            ##### *They mentioned you {mentioned_data['received'][0][0]} times*
+            ##### *They mentioned {value} {mentioned_data['received'][0][0]} times*
             """,
     ), color="dark")
     in_comm_card = dbc.Card([
@@ -433,4 +440,5 @@ def update_graph2(value):
 
 
 if __name__ == '__main__':
-    app.run()
+    #app.run_server(debug=False)
+    serve(app.server, host="0.0.0.0", port=8080)
