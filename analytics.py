@@ -50,7 +50,7 @@ message_count_by_hour_query = f"select count(*), strftime('%H', `date_sent`) as 
 top_ten_emojis_query = f"select count(*), emoji from ({reactions_clean_query}) group by emoji order by count(*) desc lIMIT 10"
 laugh_rate_query = f"select *, round((y.num_laughs*1.0/x.num_mess_w_laugh), 2) as improved_laugh_rate from (select count(distinct body) as num_mess_w_laugh, emoji_receiver from ({reactions_clean_query}) react where emoji='😂' group by emoji_receiver order by num_mess_w_laugh desc) x INNER JOIN (select count(*) as num_mess_w_laugh, m.profileFullName as name, round((r.num_laughs * 1.0)/(count(*)), 2) as laugh_rate, count(*) as num_messages, r.num_laughs from ({messages_clean_query}) m INNER JOIN (select count(*) as num_laughs, emoji_receiver from ({reactions_clean_query}) where emoji='😂' group by emoji_receiver order by num_laughs desc) r on m.profileFullName = r.emoji_receiver group by m.profileFullName order by laugh_rate desc) y on x.emoji_receiver=y.name order by improved_laugh_rate desc;"
 #improved_laugh_rate_query = f"select count(distinct body) as num_mess_w_laugh, emoji_receiver from ({reactions_clean_query}) where emoji='😂' group by emoji_receiver order by num_mess_w_laugh desc;"
-
+conversation_query = f"select name from conversations where id = '{configs['conv_id']}';"
 
 def getReactionDist(unit):
     sql.connect(configs['db_path'])
@@ -116,6 +116,9 @@ top_ten_emojis = cursor.fetchall()
 
 cursor.execute(laugh_rate_query)
 laugh_rate = cursor.fetchall()
+
+cursor.execute(conversation_query)
+convo = cursor.fetchone()
 
 
 counts_df = pd.DataFrame(total_counts, columns=["Unit", "Total Message Count"])
@@ -183,7 +186,9 @@ cursor.close()
 app.layout = html.Div([
                 # dashboard title
                 html.H1(f"Signal Wrapped {configs['year']}", style={'textAlign':'center', 'background-color':'#3273dc', 'height':'50px', 'color':'white'}),
-                #html.Br(style={'background-color':'#3273dc'}),
+                html.Br(),
+                html.H5(f"Data from conversation: {str(convo[0])}", style={'textAlign':'center'}),
+                html.Br(),
                 # header tabs
                 dcc.Tabs(id="tabs", value='Your Stats', children=[
                     dcc.Tab(label='Your Stats', value='Your Stats', selected_style={'background-color':'#9dbbf8', 'color':'black'}),
@@ -206,7 +211,7 @@ app.layout = html.Div([
                          html.Br(),
                          html.H3(children='Reaction Rank', style={'textAlign':'left', 'padding-left':'20px'}),
                          html.Label("Top 10 Emojis Used", style={'textAlign':'left', 'padding-left':'20px'}),
-                         dash_table.DataTable(data=top_emojis_df.to_dict('records'), columns=[{"name": i, "id": i} for i in top_emojis_df.columns], style={'padding-right': '20px', 'padding-left':'20px', 'width':'25%'}),
+                         dash_table.DataTable(data=top_emojis_df.to_dict('records'), columns=[{"name": i, "id": i} for i in top_emojis_df.columns]),
                          html.Br(),
                          html.Br(),
                          html.H3(children='Time and Date Behavior', style={'textAlign':'left', 'padding-left':'20px'}),
