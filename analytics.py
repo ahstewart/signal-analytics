@@ -77,7 +77,7 @@ def getReactionDetailsByUnit(unit):
 def getMostReactedMessage(unit):
     sql.connect(configs['db_path'])
     cursor = con.cursor()
-    cursor.execute(f"select count(*) as cnt, body from ({reactions_clean_query}) where emoji_receiver = '{unit}' and body not null group by body order by cnt desc limit 2;")
+    cursor.execute(f"select count(*) as cnt, body from ({reactions_clean_query}) where emoji_receiver = '{unit}' and body not null group by body order by cnt desc limit 1;")
     temp_most = cursor.fetchall()
     try:
         cursor.execute(f"select emoji, count(emoji), body, emoji_receiver from ({reactions_clean_query}) where body = \"{temp_most[0][1]}\" and emoji_receiver = '{unit}' group by emoji;")
